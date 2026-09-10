@@ -1,0 +1,29 @@
+name: CI
+
+# Roda a cada push na main e a cada Pull Request aberto para a main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  testes:
+    name: Testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar o codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar o Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar as dependencias
+        run: npm ci
+
+      - name: Rodar os testes
+        run: npm test

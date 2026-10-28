@@ -81,6 +81,10 @@ jobs:
       - name: Definir a versao a implantar
         id: versao
         run: |
+          # O GHCR exige o nome da imagem todo em minusculas, e o nome do
+          # usuario no GitHub pode ter maiusculas.
+          echo "imagem=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "valor=${{ inputs.versao }}" >> "$GITHUB_OUTPUT"
             echo "Reimplantando versao informada manualmente: ${{ inputs.versao }}"
@@ -119,10 +123,10 @@ jobs:
 
       - name: Implantar a aplicacao
         run: |
-          docker pull ${{ env.IMAGEM }}:${{ steps.versao.outputs.valor }}
+          docker pull ${{ steps.versao.outputs.imagem }}:${{ steps.versao.outputs.valor }}
           docker run -d --name aplicacao --network homologacao -p 3000:3000 \
             -e DATABASE_URL='postgres://taskflow:${{ secrets.POSTGRES_PASSWORD }}@banco:5432/taskflow' \
-            ${{ env.IMAGEM }}:${{ steps.versao.outputs.valor }}
+            ${{ steps.versao.outputs.imagem }}:${{ steps.versao.outputs.valor }}
 
       # Teste de fumaca: se a aplicacao nao responder, o deploy e considerado
       # falho e o pipeline fica vermelho.
@@ -157,7 +161,7 @@ jobs:
             echo ""
             echo "| Item | Valor |"
             echo "| --- | --- |"
-            echo "| Imagem | \`${{ env.IMAGEM }}\` |"
+            echo "| Imagem | \`${{ steps.versao.outputs.imagem }}\` |"
             echo "| Versao | \`${{ steps.versao.outputs.valor }}\` |"
             echo "| Origem | \`${{ github.event_name }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"

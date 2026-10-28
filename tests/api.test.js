@@ -2,21 +2,36 @@
 
 const request = require('supertest');
 const app = require('../src/app');
-const tasks = require('../src/tasks');
+const { pool, init } = require('../src/db');
 
-// Testes de integracao: fazem requisicoes HTTP de verdade contra a aplicacao.
+// Testes de integracao: requisicoes HTTP reais contra a aplicacao, com um
+// PostgreSQL de verdade por tras. No pipeline o banco sobe como service
+// container; na maquina do desenvolvedor, pelo docker compose.
 describe('API de tarefas', () => {
-  beforeEach(() => {
-    tasks.reset();
+  beforeAll(async () => {
+    await init();
+  });
+
+  beforeEach(async () => {
+    await pool.query('TRUNCATE tasks RESTART IDENTITY');
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it('GET /health responde ok com o banco conectado', async () => {
+    const resposta = await request(app).get('/health').expect(200);
+    expect(resposta.body).toEqual({ status: 'ok', banco: 'conectado' });
   });
 
   it('POST /tasks cria a tarefa e responde 201', async () => {
     const resposta = await request(app)
       .post('/tasks')
-      .send({ title: 'Escrever os testes' })
+      .send({ title: 'Escrever o Dockerfile' })
       .expect(201);
 
-    expect(resposta.body).toEqual({ id: 1, title: 'Escrever os testes', status: 'pendente' });
+    expect(resposta.body).toEqual({ id: 1, title: 'Escrever o Dockerfile', status: 'pendente' });
   });
 
   it('POST /tasks responde 400 com titulo invalido', async () => {
@@ -24,12 +39,12 @@ describe('API de tarefas', () => {
     expect(resposta.body.erro).toMatch(/pelo menos 3 caracteres/);
   });
 
-  it('GET /tasks lista as tarefas', async () => {
+  it('persiste a tarefa entre requisicoes', async () => {
     await request(app).post('/tasks').send({ title: 'Primeira tarefa' });
-    await request(app).post('/tasks').send({ title: 'Segunda tarefa' });
 
     const resposta = await request(app).get('/tasks').expect(200);
-    expect(resposta.body).toHaveLength(2);
+    expect(resposta.body).toHaveLength(1);
+    expect(resposta.body[0].title).toBe('Primeira tarefa');
   });
 
   it('GET /tasks?status=concluida filtra a listagem', async () => {
@@ -40,6 +55,10 @@ describe('API de tarefas', () => {
     const resposta = await request(app).get('/tasks?status=concluida').expect(200);
     expect(resposta.body).toHaveLength(1);
     expect(resposta.body[0].title).toBe('Tarefa concluida');
+  });
+
+  it('GET /tasks com status invalido responde 400', async () => {
+    await request(app).get('/tasks?status=arquivada').expect(400);
   });
 
   it('PATCH /tasks/:id/concluir marca como concluida', async () => {
@@ -56,7 +75,14 @@ describe('API de tarefas', () => {
     await request(app).get(`/tasks/${criada.body.id}`).expect(404);
   });
 
-  it('GET /tasks/:id responde 404 quando a tarefa nao existe', async () => {
+  it('responde 404 para tarefa inexistente', async () => {
     await request(app).get('/tasks/99').expect(404);
+    await request(app).patch('/tasks/99/concluir').expect(404);
+    await request(app).delete('/tasks/99').expect(404);
+  });
+
+  it('serve a interface na raiz', async () => {
+    const resposta = await request(app).get('/').expect(200);
+    expect(resposta.text).toMatch(/TaskFlow/);
   });
 });

@@ -1,46 +1,61 @@
 'use strict';
 
+const path = require('node:path');
 const express = require('express');
 const tasks = require('./tasks');
+const { pool } = require('./db');
 
 const app = express();
 app.use(express.json());
 
-app.get('/tasks', (req, res, next) => {
+// Interface de interacao: pagina unica servida pela propria aplicacao.
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Usado pelo healthcheck do contêiner e pelo teste de fumaca do deploy.
+app.get('/health', async (req, res) => {
   try {
-    res.json(tasks.list(req.query.status));
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', banco: 'conectado' });
+  } catch {
+    res.status(503).json({ status: 'degradado', banco: 'indisponivel' });
+  }
+});
+
+app.get('/tasks', async (req, res, next) => {
+  try {
+    res.json(await tasks.list(req.query.status));
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/tasks/:id', (req, res, next) => {
+app.get('/tasks/:id', async (req, res, next) => {
   try {
-    res.json(tasks.getById(req.params.id));
+    res.json(await tasks.getById(req.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/tasks', (req, res, next) => {
+app.post('/tasks', async (req, res, next) => {
   try {
-    res.status(201).json(tasks.create(req.body));
+    res.status(201).json(await tasks.create(req.body));
   } catch (error) {
     next(error);
   }
 });
 
-app.patch('/tasks/:id/concluir', (req, res, next) => {
+app.patch('/tasks/:id/concluir', async (req, res, next) => {
   try {
-    res.json(tasks.complete(req.params.id));
+    res.json(await tasks.complete(req.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/tasks/:id', (req, res, next) => {
+app.delete('/tasks/:id', async (req, res, next) => {
   try {
-    tasks.remove(req.params.id);
+    await tasks.remove(req.params.id);
     res.status(204).send();
   } catch (error) {
     next(error);

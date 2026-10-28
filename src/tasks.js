@@ -1,11 +1,8 @@
 'use strict';
 
-const STATUSES = ['pendente', 'concluida'];
+const { pool } = require('./db');
 
-// Lista em memoria. O projeto e o inicio da aplicacao: o banco de dados entra
-// depois, sem mudar quem usa estas funcoes.
-let tasks = [];
-let proximoId = 1;
+const STATUSES = ['pendente', 'concluida'];
 
 class ValidationError extends Error {
   constructor(message) {
@@ -23,50 +20,94 @@ class NotFoundError extends Error {
   }
 }
 
-function create(input) {
+// --- Regras puras: nao acessam o banco, por isso sao testadas isoladamente ---
+
+function validarTitulo(input) {
   const title = typeof input?.title === 'string' ? input.title.trim() : '';
   if (title.length < 3) {
     throw new ValidationError('O titulo deve ter pelo menos 3 caracteres.');
   }
-
-  const task = { id: proximoId++, title, status: 'pendente' };
-  tasks.push(task);
-  return task;
+  return title;
 }
 
-function list(status) {
-  if (!status) {
-    return tasks;
-  }
+function validarStatus(status) {
   if (!STATUSES.includes(status)) {
     throw new ValidationError(`O status deve ser: ${STATUSES.join(' ou ')}.`);
   }
-  return tasks.filter((task) => task.status === status);
+  return status;
 }
 
-function getById(id) {
-  const task = tasks.find((item) => item.id === Number(id));
-  if (!task) {
+function validarId(id) {
+  const numero = Number(id);
+  if (!Number.isInteger(numero) || numero < 1) {
     throw new NotFoundError(`Tarefa ${id} nao encontrada.`);
   }
-  return task;
+  return numero;
 }
 
-function complete(id) {
-  const task = getById(id);
-  task.status = 'concluida';
-  return task;
+// --- Operacoes sobre o banco ---
+
+async function create(input) {
+  const title = validarTitulo(input);
+  const { rows } = await pool.query(
+    'INSERT INTO tasks (title) VALUES ($1) RETURNING id, title, status',
+    [title],
+  );
+  return rows[0];
 }
 
-function remove(id) {
-  const task = getById(id);
-  tasks = tasks.filter((item) => item.id !== task.id);
+async function list(status) {
+  if (!status) {
+    const { rows } = await pool.query('SELECT id, title, status FROM tasks ORDER BY id');
+    return rows;
+  }
+
+  const { rows } = await pool.query(
+    'SELECT id, title, status FROM tasks WHERE status = $1 ORDER BY id',
+    [validarStatus(status)],
+  );
+  return rows;
 }
 
-// Usado pelos testes para comecar cada caso com a lista vazia.
-function reset() {
-  tasks = [];
-  proximoId = 1;
+async function getById(id) {
+  const { rows } = await pool.query(
+    'SELECT id, title, status FROM tasks WHERE id = $1',
+    [validarId(id)],
+  );
+  if (rows.length === 0) {
+    throw new NotFoundError(`Tarefa ${id} nao encontrada.`);
+  }
+  return rows[0];
 }
 
-module.exports = { create, list, getById, complete, remove, reset, ValidationError, NotFoundError };
+async function complete(id) {
+  const { rows } = await pool.query(
+    "UPDATE tasks SET status = 'concluida' WHERE id = $1 RETURNING id, title, status",
+    [validarId(id)],
+  );
+  if (rows.length === 0) {
+    throw new NotFoundError(`Tarefa ${id} nao encontrada.`);
+  }
+  return rows[0];
+}
+
+async function remove(id) {
+  const { rowCount } = await pool.query('DELETE FROM tasks WHERE id = $1', [validarId(id)]);
+  if (rowCount === 0) {
+    throw new NotFoundError(`Tarefa ${id} nao encontrada.`);
+  }
+}
+
+module.exports = {
+  STATUSES,
+  ValidationError,
+  NotFoundError,
+  validarTitulo,
+  validarStatus,
+  validarId,
+  create,
+  list,
+  getById,
+  complete,
+  remove,
+};

@@ -56,6 +56,11 @@ jobs:
       - name: Baixar o codigo
         uses: actions/checkout@v4
 
+      # O builder padrao do runner usa o driver "docker", que nao suporta
+      # exportacao de cache. O Buildx cria um builder que suporta.
+      - name: Preparar o Buildx
+        uses: docker/setup-buildx-action@v3
+
       # Constroi a imagem sem publicar. Garante que um Dockerfile quebrado
       # seja descoberto no Pull Request, e nao depois do merge.
       - name: Construir a imagem

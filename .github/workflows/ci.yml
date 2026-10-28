@@ -1,6 +1,6 @@
 name: CI
 
-# Roda a cada push na main e a cada Pull Request aberto para a main.
+# Integracao Continua: roda a cada push na main e a cada Pull Request.
 on:
   push:
     branches: [main]
@@ -11,6 +11,26 @@ jobs:
   testes:
     name: Testes
     runs-on: ubuntu-latest
+
+    # O banco sobe como service container, para que os testes de integracao
+    # rodem contra um PostgreSQL de verdade e nao contra um substituto.
+    services:
+      banco:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: taskflow
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: taskflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://taskflow:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/taskflow_test
 
     steps:
       - name: Baixar o codigo
@@ -27,3 +47,21 @@ jobs:
 
       - name: Rodar os testes
         run: npm test
+
+  imagem:
+    name: Build da imagem
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar o codigo
+        uses: actions/checkout@v4
+
+      # Constroi a imagem sem publicar. Garante que um Dockerfile quebrado
+      # seja descoberto no Pull Request, e nao depois do merge.
+      - name: Construir a imagem
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,166 @@
+name: CD
+
+# Entrega Continua: publica a imagem no GitHub Container Registry e implanta
+# no ambiente de homologacao.
+#
+#   push na main       -> publica como "latest" e implanta
+#   tag v1.2.3         -> publica como 1.2.3, 1.2 e latest, e implanta
+#   execucao manual    -> implanta uma versao ja publicada (usado no ROLLBACK)
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: 'Versao ja publicada para reimplantar (ex: 1.0.0 ou latest). Use para rollback.'
+        required: true
+        default: latest
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGEM: ghcr.io/${{ github.repository }}
+
+jobs:
+  publicar:
+    name: Construir e publicar imagem
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      versao: ${{ steps.etiquetas.outputs.version }}
+
+    steps:
+      - name: Baixar o codigo
+        uses: actions/checkout@v4
+
+      - name: Autenticar no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Token gerado automaticamente pelo Actions para esta execucao.
+          # Expira no fim do job e nunca precisa ser guardado no repositorio.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calcular as etiquetas da imagem (versionamento semantico)
+        id: etiquetas
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGEM }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+
+      - name: Construir e publicar
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.etiquetas.outputs.tags }}
+          labels: ${{ steps.etiquetas.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  homologacao:
+    name: Deploy em homologacao
+    needs: [publicar]
+    if: always() && (needs.publicar.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Definir a versao a implantar
+        id: versao
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "valor=${{ inputs.versao }}" >> "$GITHUB_OUTPUT"
+            echo "Reimplantando versao informada manualmente: ${{ inputs.versao }}"
+          else
+            echo "valor=${{ needs.publicar.outputs.versao }}" >> "$GITHUB_OUTPUT"
+            echo "Implantando a versao recem-publicada: ${{ needs.publicar.outputs.versao }}"
+          fi
+
+      - name: Autenticar no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # O ambiente de homologacao e simulado no proprio runner: banco e
+      # aplicacao sobem como contêineres, do mesmo jeito que subiriam num
+      # servidor real.
+      - name: Subir o banco de homologacao
+        run: |
+          docker network create homologacao
+          docker run -d --name banco --network homologacao \
+            -e POSTGRES_USER=taskflow \
+            -e POSTGRES_PASSWORD='${{ secrets.POSTGRES_PASSWORD }}' \
+            -e POSTGRES_DB=taskflow \
+            --health-cmd=pg_isready --health-interval=5s --health-retries=10 \
+            postgres:16-alpine
+
+          echo "Aguardando o banco ficar saudavel..."
+          for _ in $(seq 1 30); do
+            estado=$(docker inspect -f '{{.State.Health.Status}}' banco)
+            [ "$estado" = "healthy" ] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' banco
+
+      - name: Implantar a aplicacao
+        run: |
+          docker pull ${{ env.IMAGEM }}:${{ steps.versao.outputs.valor }}
+          docker run -d --name aplicacao --network homologacao -p 3000:3000 \
+            -e DATABASE_URL='postgres://taskflow:${{ secrets.POSTGRES_PASSWORD }}@banco:5432/taskflow' \
+            ${{ env.IMAGEM }}:${{ steps.versao.outputs.valor }}
+
+      # Teste de fumaca: se a aplicacao nao responder, o deploy e considerado
+      # falho e o pipeline fica vermelho.
+      - name: Teste de fumaca
+        run: |
+          echo "Aguardando a aplicacao responder..."
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:3000/health > /dev/null && break
+            sleep 2
+          done
+
+          echo "--- /health ---"
+          curl -sf http://localhost:3000/health | tee /tmp/saude.json
+          grep -q '"status":"ok"' /tmp/saude.json
+
+          echo "--- criando uma tarefa ---"
+          curl -sf -X POST http://localhost:3000/tasks \
+            -H 'Content-Type: application/json' \
+            -d '{"title":"Tarefa do teste de fumaca"}' | tee /tmp/criada.json
+          grep -q 'Tarefa do teste de fumaca' /tmp/criada.json
+
+          echo "--- lendo de volta ---"
+          curl -sf http://localhost:3000/tasks | grep -q 'Tarefa do teste de fumaca'
+
+          echo "Deploy da versao ${{ steps.versao.outputs.valor }} validado."
+
+      - name: Registrar o que foi implantado
+        if: always()
+        run: |
+          {
+            echo "### Deploy em homologacao"
+            echo ""
+            echo "| Item | Valor |"
+            echo "| --- | --- |"
+            echo "| Imagem | \`${{ env.IMAGEM }}\` |"
+            echo "| Versao | \`${{ steps.versao.outputs.valor }}\` |"
+            echo "| Origem | \`${{ github.event_name }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Derrubar o ambiente
+        if: always()
+        run: |
+          docker logs aplicacao 2>&1 | tail -30 || true
+          docker rm -f aplicacao banco || true
+          docker network rm homologacao || true

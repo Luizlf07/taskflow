@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TaskFlow</title>
+  <style>
+    :root {
+      --fundo: #f6f7f9;
+      --cartao: #ffffff;
+      --borda: #e3e6ea;
+      --texto: #1c1f23;
+      --suave: #6b7280;
+      --acento: #2563eb;
+      --ok: #16a34a;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fundo: #16181c;
+        --cartao: #1e2126;
+        --borda: #2e3238;
+        --texto: #e8eaed;
+        --suave: #9aa1ab;
+        --acento: #60a5fa;
+        --ok: #4ade80;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      background: var(--fundo);
+      color: var(--texto);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    main { max-width: 560px; margin: 0 auto; }
+
+    h1 { font-size: 26px; margin: 0 0 4px; }
+
+    .subtitulo { color: var(--suave); margin: 0 0 24px; font-size: 14px; }
+
+    form { display: flex; gap: 8px; margin-bottom: 20px; }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--borda);
+      border-radius: 8px;
+      background: var(--cartao);
+      color: var(--texto);
+      font-size: 15px;
+    }
+
+    input[type="text"]:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+
+    button {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      background: var(--acento);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    button:hover { opacity: .9; }
+
+    .filtros { display: flex; gap: 8px; margin-bottom: 16px; }
+
+    .filtros button {
+      background: transparent;
+      color: var(--suave);
+      border: 1px solid var(--borda);
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+
+    .filtros button[aria-pressed="true"] {
+      color: var(--acento);
+      border-color: var(--acento);
+    }
+
+    ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+
+    li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--cartao);
+      border: 1px solid var(--borda);
+      border-radius: 10px;
+    }
+
+    .titulo { flex: 1; }
+
+    li.feita .titulo { text-decoration: line-through; color: var(--suave); }
+
+    .acao {
+      background: transparent;
+      color: var(--suave);
+      padding: 4px 8px;
+      font-size: 13px;
+      border: 1px solid var(--borda);
+      border-radius: 6px;
+    }
+
+    .acao.concluir:hover { color: var(--ok); border-color: var(--ok); }
+
+    .acao.apagar:hover { color: #dc2626; border-color: #dc2626; }
+
+    .vazio, .erro { color: var(--suave); text-align: center; padding: 28px 0; }
+
+    .erro { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>TaskFlow</h1>
+    <p class="subtitulo">Gerenciador de tarefas — projeto da disciplina de DevOps</p>
+
+    <form id="formulario">
+      <input type="text" id="titulo" placeholder="O que precisa ser feito?" minlength="3" required>
+      <button type="submit">Adicionar</button>
+    </form>
+
+    <div class="filtros">
+      <button type="button" data-filtro="" aria-pressed="true">Todas</button>
+      <button type="button" data-filtro="pendente" aria-pressed="false">Pendentes</button>
+      <button type="button" data-filtro="concluida" aria-pressed="false">Concluídas</button>
+    </div>
+
+    <ul id="lista"></ul>
+  </main>
+
+  <script>
+    const lista = document.getElementById('lista');
+    const formulario = document.getElementById('formulario');
+    const campoTitulo = document.getElementById('titulo');
+    let filtroAtual = '';
+
+    async function carregar() {
+      try {
+        const url = filtroAtual ? `/tasks?status=${filtroAtual}` : '/tasks';
+        const resposta = await fetch(url);
+        if (!resposta.ok) throw new Error('Falha ao carregar as tarefas.');
+        desenhar(await resposta.json());
+      } catch (erro) {
+        lista.innerHTML = `<li class="erro">${erro.message}</li>`;
+      }
+    }
+
+    function desenhar(tarefas) {
+      if (tarefas.length === 0) {
+        lista.innerHTML = '<li class="vazio">Nenhuma tarefa por aqui.</li>';
+        return;
+      }
+
+      lista.innerHTML = '';
+      for (const tarefa of tarefas) {
+        const item = document.createElement('li');
+        if (tarefa.status === 'concluida') item.classList.add('feita');
+
+        const titulo = document.createElement('span');
+        titulo.className = 'titulo';
+        titulo.textContent = tarefa.title;
+        item.append(titulo);
+
+        if (tarefa.status !== 'concluida') {
+          const concluir = document.createElement('button');
+          concluir.className = 'acao concluir';
+          concluir.textContent = 'Concluir';
+          concluir.onclick = () => acao(`/tasks/${tarefa.id}/concluir`, 'PATCH');
+          item.append(concluir);
+        }
+
+        const apagar = document.createElement('button');
+        apagar.className = 'acao apagar';
+        apagar.textContent = 'Apagar';
+        apagar.onclick = () => acao(`/tasks/${tarefa.id}`, 'DELETE');
+        item.append(apagar);
+
+        lista.append(item);
+      }
+    }
+
+    async function acao(url, metodo) {
+      await fetch(url, { method: metodo });
+      carregar();
+    }
+
+    formulario.onsubmit = async (evento) => {
+      evento.preventDefault();
+      await fetch('/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: campoTitulo.value }),
+      });
+      campoTitulo.value = '';
+      carregar();
+    };
+
+    for (const botao of document.querySelectorAll('.filtros button')) {
+      botao.onclick = () => {
+        filtroAtual = botao.dataset.filtro;
+        for (const outro of document.querySelectorAll('.filtros button')) {
+          outro.setAttribute('aria-pressed', String(outro === botao));
+        }
+        carregar();
+      };
+    }
+
+    carregar();
+  </script>
+</body>
+</html>

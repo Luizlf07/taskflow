@@ -1,11 +1,15 @@
 'use strict';
 
+const path = require('node:path');
 const express = require('express');
 const tasks = require('./tasks');
 const { pool } = require('./db');
 
 const app = express();
 app.use(express.json());
+
+// Interface de interacao: pagina unica servida pela propria aplicacao.
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Usado pelo healthcheck do contêiner e pelo teste de fumaca do deploy.
 app.get('/health', async (req, res) => {

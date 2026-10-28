@@ -80,4 +80,9 @@ describe('API de tarefas', () => {
     await request(app).patch('/tasks/99/concluir').expect(404);
     await request(app).delete('/tasks/99').expect(404);
   });
+
+  it('serve a interface na raiz', async () => {
+    const resposta = await request(app).get('/').expect(200);
+    expect(resposta.text).toMatch(/TaskFlow/);
+  });
 });
